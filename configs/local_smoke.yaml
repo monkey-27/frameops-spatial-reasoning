@@ -1,0 +1,20 @@
+seed: 11
+output_dir: data/synthetic/local_smoke
+synthetic:
+  image_size: 128
+  train_scenes: 24
+  val_scenes: 8
+  test_scenes: 8
+  min_objects: 3
+  max_objects: 5
+  heldout_test_hard: true
+training:
+  batch_size: 8
+  epochs: 1
+  lr: 0.001
+  hidden_dim: 64
+  checkpoint_dir: checkpoints/local_smoke
+  freeze_qwen: true
+  wandb: false
+eval:
+  noise_levels: [0.0, 0.1]

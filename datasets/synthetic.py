@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from PIL import Image, ImageDraw
 
+from frameops.operators import line_of_sight
+from frameops.slots import SpatialBatch, SpatialSlot
 from frameops.utils import write_jsonl
 
 COLORS = {
@@ -118,7 +121,10 @@ def _render_scene(objects: list[ObjectSpec], image_path: Path, image_size: int) 
             u = (obj.bbox[0] + obj.bbox[2]) * 0.5
             draw.polygon([(u, obj.bbox[1]), (obj.bbox[2], obj.bbox[3]), (obj.bbox[0], obj.bbox[3])], fill=fill, outline=outline)
         elif obj.shape == "cylinder":
-            draw.rounded_rectangle(obj.bbox, radius=6, fill=fill, outline=outline, width=2)
+            box_w = max(1.0, obj.bbox[2] - obj.bbox[0])
+            box_h = max(1.0, obj.bbox[3] - obj.bbox[1])
+            radius_px = int(max(1.0, min(6.0, box_w * 0.25, box_h * 0.25)))
+            draw.rounded_rectangle(obj.bbox, radius=radius_px, fill=fill, outline=outline, width=2)
             draw.ellipse([obj.bbox[0], obj.bbox[1], obj.bbox[2], obj.bbox[1] + (obj.bbox[3] - obj.bbox[1]) * 0.28], fill=(*color, 245), outline=outline, width=1)
         else:
             draw.rectangle(obj.bbox, fill=fill, outline=outline, width=2)
@@ -169,24 +175,19 @@ def _dist(a: ObjectSpec, b: ObjectSpec) -> float:
 
 
 def _simple_los(viewer: list[float], target: ObjectSpec, objects: list[ObjectSpec]) -> bool:
-    v = np.asarray(viewer, dtype=np.float32)
-    t = np.asarray(target.center, dtype=np.float32)
-    ray = t - v
-    denom = float(np.dot(ray, ray))
-    if denom < 1e-6:
+    occluders = [
+        SpatialSlot(obj.id, obj.label, obj.center, obj.extent, obj.yaw, obj.confidence)
+        for obj in objects
+        if obj.id != target.id
+    ]
+    if not occluders:
         return True
-    for obj in objects:
-        if obj.id == target.id:
-            continue
-        c = np.asarray(obj.center, dtype=np.float32)
-        proj = float(np.dot(c - v, ray) / denom)
-        if not 0.05 < proj < 0.95:
-            continue
-        closest = v + proj * ray
-        radius = 0.55 * max(obj.extent[0], obj.extent[2])
-        if float(np.linalg.norm(c - closest)) < radius:
-            return False
-    return True
+    logit = line_of_sight(
+        torch.tensor(viewer, dtype=torch.float32),
+        torch.tensor(target.center, dtype=torch.float32),
+        SpatialBatch(occluders),
+    )
+    return bool(float(logit) > 0.0)
 
 
 def _make_question(rng: random.Random, objects: list[ObjectSpec], task: str, difficulty: str) -> dict[str, Any]:
@@ -248,7 +249,7 @@ def _make_question(rng: random.Random, objects: list[ObjectSpec], task: str, dif
         bx = _rotated_x(b.center, camera["position"], yaw_delta)
         answer = "yes" if ax < bx else "no"
         question = f"If the viewer rotated 90 degrees left, would the {describe(a)} appear left of the {describe(b)}?"
-        program = [{"op": "counterfactual_rotate_frame", "frame": "camera", "yaw_delta": yaw_delta}, {"op": "compare_axis", "a": b.id, "b": a.id, "axis": "x"}]
+        program = [{"op": "counterfactual_rotate_frame", "frame": "camera", "yaw_delta": yaw_delta}, {"op": "compare_axis", "a": b.id, "b": a.id, "axis": "x", "relation": "left"}]
     elif task == "perspective_taking":
         viewer = rng.choice([obj for obj in objects if obj.id not in {a.id, b.id}])
         frames.append({"id": f"object:{viewer.id}", "type": "object", "origin": viewer.center, "yaw": viewer.yaw})
@@ -256,7 +257,7 @@ def _make_question(rng: random.Random, objects: list[ObjectSpec], task: str, dif
         bx = _rotated_x(b.center, viewer.center, viewer.yaw)
         answer = "yes" if ax < bx else "no"
         question = f"From the {describe(viewer)}'s perspective, is the {describe(a)} left of the {describe(b)}?"
-        program = [{"op": "perspective_taking", "viewer": viewer.id}, {"op": "compare_axis", "frame": f"object:{viewer.id}", "a": b.id, "b": a.id, "axis": "x"}]
+        program = [{"op": "perspective_taking", "viewer": viewer.id}, {"op": "compare_axis", "frame": f"object:{viewer.id}", "a": b.id, "b": a.id, "axis": "x", "relation": "left"}]
     else:
         raise ValueError(task)
 
