@@ -50,6 +50,7 @@ image = (
     .add_local_dir(ROOT / "scripts", remote_path=str(REMOTE_ROOT / "scripts"))
     .add_local_dir(ROOT / "configs", remote_path=str(REMOTE_ROOT / "configs"))
     .add_local_file(ROOT / "pyproject.toml", remote_path=str(REMOTE_ROOT / "pyproject.toml"))
+    .add_local_file(ROOT / "modal" / "modal_app.py", remote_path="/root/modal_app.py")
 )
 
 

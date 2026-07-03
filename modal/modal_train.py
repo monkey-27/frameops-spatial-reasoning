@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
+
+for candidate in (Path(__file__).resolve().parent, Path("/root")):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 from modal_app import CACHE, REMOTE_ROOT, VOL, app, hf_cache, image, volume, _run
 
