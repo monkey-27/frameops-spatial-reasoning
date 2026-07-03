@@ -218,6 +218,13 @@ def diagnostic_hidden_status(
     return {"status": "ok", "out_dir": out, "n": str(n)}
 
 
+@app.function(image=image, timeout=30 * 60, volumes={str(VOL): volume, str(CACHE): hf_cache})
+def diagnostic_report(out_dir: str) -> dict[str, str]:
+    _run(["scripts/write_diagnostic_report.py", "--out_dir", out_dir])
+    volume.commit()
+    return {"status": "ok", "out_dir": out_dir, "report": str(Path(out_dir) / "diagnostic_report.md")}
+
+
 @app.function(
     image=image,
     gpu="A10G",
