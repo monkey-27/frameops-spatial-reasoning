@@ -39,6 +39,8 @@ TASKS = [
     "counterfactual_viewer_rotation",
     "perspective_taking",
 ]
+DIAGNOSTIC_TASKS = TASKS + ["distractor_heavy_relation"]
+DIAGNOSTIC_HARDNESS = ["easy", "medium", "hard"]
 
 
 @dataclass
@@ -258,6 +260,16 @@ def _make_question(rng: random.Random, objects: list[ObjectSpec], task: str, dif
         answer = "yes" if ax < bx else "no"
         question = f"From the {describe(viewer)}'s perspective, is the {describe(a)} left of the {describe(b)}?"
         program = [{"op": "perspective_taking", "viewer": viewer.id}, {"op": "compare_axis", "frame": f"object:{viewer.id}", "a": b.id, "b": a.id, "axis": "x", "relation": "left"}]
+    elif task == "distractor_heavy_relation":
+        c = rng.choice([obj for obj in objects if obj.id not in {a.id, b.id}])
+        distractor = max(objects, key=lambda obj: obj.extent[0] * obj.extent[1] * obj.extent[2])
+        answer = "yes" if _dist(a, c) < _dist(b, c) else "no"
+        question = (
+            f"Ignore the visually salient {describe(distractor)}. "
+            f"Using 3D positions, is the {describe(a)} closer to the {describe(c)} "
+            f"than the {describe(b)} is?"
+        )
+        program = [{"op": "closer_than", "a": a.id, "b": b.id, "ref": c.id}]
     else:
         raise ValueError(task)
 
@@ -338,5 +350,161 @@ def generate_dataset(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         "notes": "Synthetic oracle v0. Test split biases toward more objects, close distractors, occlusion, and viewpoint changes.",
     }
     with (out / "manifest.json").open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+    return rows
+
+
+def _diagnostic_object_count(rng: random.Random, hardness: str) -> int:
+    if hardness == "easy":
+        return rng.randint(3, 4)
+    if hardness == "medium":
+        return rng.randint(5, 6)
+    return rng.randint(7, 8)
+
+
+def _diagnostic_hard_flag(hardness: str) -> bool:
+    return hardness in {"medium", "hard"}
+
+
+def _camera_left(obj_a: ObjectSpec, obj_b: ObjectSpec) -> bool:
+    return obj_a.center[0] < obj_b.center[0]
+
+
+def _diagnostic_flags(row: dict[str, Any]) -> list[str]:
+    task = row["metadata"]["task_type"]
+    flags: list[str] = []
+    objects = {obj["id"]: obj for obj in row["objects"]}
+    if task in {"object_centered_frame", "perspective_taking"}:
+        compare = next((step for step in row["program"] if step.get("op") == "compare_axis"), None)
+        if compare:
+            a = objects[compare["b"]]
+            b = objects[compare["a"]]
+            camera_answer = a["center"][0] < b["center"][0]
+            if camera_answer != (row["answer"] == "yes"):
+                flags.append("image_frame_differs_from_target_frame")
+    if task == "occlusion_line_of_sight" and row["answer"] == "no":
+        flags.append("semantically_obvious_but_geometrically_blocked")
+    if task == "distractor_heavy_relation":
+        flags.append("nearest_object_not_visually_saliencified")
+    if task in {"counterfactual_translation", "counterfactual_viewer_rotation"}:
+        flags.append("counterfactual_changes_relation")
+    return flags
+
+
+def _make_diagnostic_row(
+    *,
+    out: Path,
+    split: str,
+    idx: int,
+    task: str,
+    hardness: str,
+    image_size: int,
+    rng: random.Random,
+) -> dict[str, Any]:
+    hard = _diagnostic_hard_flag(hardness)
+    for attempt in range(80):
+        objects = _sample_objects(rng, _diagnostic_object_count(rng, hardness), hard=hard)
+        if hardness == "hard":
+            for obj in objects[1:]:
+                if rng.random() < 0.25:
+                    obj.center[0] = objects[0].center[0] + rng.uniform(-0.22, 0.22)
+                    obj.center[1] = objects[0].center[1] + rng.uniform(-0.22, 0.22)
+        qa = _make_question(rng, objects, task, hardness)
+        row_id = f"{split}_{task}_{idx:05d}"
+        image_path = out / "images" / split / f"{row_id}.png"
+        _render_scene(objects, image_path, image_size)
+        row = {
+            "id": row_id,
+            "image_path": str(image_path),
+            "question": qa["question"],
+            "answer": qa["answer"],
+            "program": qa["program"],
+            "objects": [obj.to_dict() for obj in objects],
+            "frames": qa["frames"],
+            "camera": qa["camera"] | {"image_width": image_size, "image_height": image_size},
+            "metadata": qa["metadata"]
+            | {
+                "task_type": task,
+                "task_family": task,
+                "difficulty": hardness,
+                "hardness": hardness,
+                "num_objects": len(objects),
+                "diagnostic": True,
+                "attempt": attempt,
+            },
+        }
+        flags = _diagnostic_flags(row)
+        row["metadata"]["diagnostic_flags"] = flags
+        if task in {"object_centered_frame", "perspective_taking"} and hardness != "easy":
+            if "image_frame_differs_from_target_frame" not in flags:
+                continue
+        if task == "occlusion_line_of_sight" and hardness == "hard" and row["answer"] != "no":
+            continue
+        return row
+    return row
+
+
+def generate_diagnostic_dataset(
+    output_dir: str | Path,
+    *,
+    seed: int = 20260703,
+    image_size: int = 256,
+    test_per_task: int = 50,
+    train_per_task: int = 100,
+    val_per_task: int = 20,
+    enforce_min_test: bool = True,
+) -> dict[str, list[dict[str, Any]]]:
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    split_specs = {"train": train_per_task, "val": val_per_task, "test": test_per_task}
+    rows: dict[str, list[dict[str, Any]]] = {}
+    manifest: dict[str, Any] = {
+        "seed": seed,
+        "image_size": image_size,
+        "tasks": DIAGNOSTIC_TASKS,
+        "hardness_buckets": DIAGNOSTIC_HARDNESS,
+        "splits": {},
+        "notes": (
+            "Balanced fixed diagnostic split. Test is intended for paired interface comparisons; "
+            "do not tune on test after generating it."
+        ),
+    }
+    for split_idx, (split, per_task) in enumerate(split_specs.items()):
+        rng = random.Random(seed + 10000 * split_idx)
+        split_rows: list[dict[str, Any]] = []
+        for task in DIAGNOSTIC_TASKS:
+            for task_idx in range(per_task):
+                hardness = DIAGNOSTIC_HARDNESS[task_idx % len(DIAGNOSTIC_HARDNESS)]
+                split_rows.append(
+                    _make_diagnostic_row(
+                        out=out,
+                        split=split,
+                        idx=len(split_rows),
+                        task=task,
+                        hardness=hardness,
+                        image_size=image_size,
+                        rng=rng,
+                    )
+                )
+        rng.shuffle(split_rows)
+        write_jsonl(out / f"diagnostic_{split}.jsonl", split_rows)
+        write_jsonl(out / f"{split}.jsonl", split_rows)
+        counts = {}
+        for task in DIAGNOSTIC_TASKS:
+            counts[task] = sum(1 for row in split_rows if row["metadata"]["task_type"] == task)
+        manifest["splits"][split] = {
+            "n": len(split_rows),
+            "per_task": counts,
+            "hardness": {
+                bucket: sum(1 for row in split_rows if row["metadata"]["hardness"] == bucket)
+                for bucket in DIAGNOSTIC_HARDNESS
+            },
+            "path": str(out / f"diagnostic_{split}.jsonl"),
+        }
+        rows[split] = split_rows
+    min_test = min(manifest["splits"]["test"]["per_task"].values())
+    if enforce_min_test and min_test < 50:
+        raise ValueError(f"Diagnostic test split must have at least 50 per task; min={min_test}")
+    with (out / "diagnostic_manifest.json").open("w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
     return rows

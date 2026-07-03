@@ -20,15 +20,16 @@ class FrameOpsEvidence:
     selected_objects: list[str]
     frame: str
 
-    def to_text(self) -> str:
+    def to_text(self, *, include_answer: bool = True, label: str = "FrameOps evidence") -> str:
         trace_bits = "; ".join(
             f"{step.get('op')}={step.get('logit', step.get('vector', step.get('delta', '')))}"
             for step in self.trace
         )
+        answer_bit = f"predicted_answer={self.answer}; " if include_answer else ""
         return (
-            "FrameOps evidence: "
+            f"{label}: "
             f"selected_objects={self.selected_objects}; frame={self.frame}; "
-            f"predicted_answer={self.answer}; confidence={self.confidence:.3f}; trace={trace_bits}"
+            f"{answer_bit}confidence={self.confidence:.3f}; trace={trace_bits}"
         )
 
 
@@ -87,6 +88,16 @@ def build_evidence(sample: dict[str, Any], slots: SpatialBatch | None = None) ->
 
 def serialize_frameops_text(sample: dict[str, Any], slots: SpatialBatch | None = None) -> str:
     return build_evidence(sample, slots=slots).to_text()
+
+
+def serialize_frameops_evidence_text(
+    sample: dict[str, Any],
+    slots: SpatialBatch | None = None,
+    *,
+    include_answer: bool = False,
+    label: str = "FrameOps evidence",
+) -> str:
+    return build_evidence(sample, slots=slots).to_text(include_answer=include_answer, label=label)
 
 
 class EvidenceProjector(nn.Module):

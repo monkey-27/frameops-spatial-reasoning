@@ -37,6 +37,33 @@ class QwenFrameOpsConnectorAdapter(nn.Module):
     def set_evidence(self, evidence_features: torch.Tensor | None) -> None:
         self._evidence = evidence_features
 
+    def _project_delta(self) -> torch.Tensor | None:
+        if self._evidence is None:
+            return None
+        ev = self._evidence.to(next(self.parameters()).device)
+        delta = self.project(ev)
+        if delta.ndim == 2:
+            delta = delta[:, None, :]
+        return delta.mean(dim=1)
+
+    def _add_delta(self, output: Any, delta_summary: torch.Tensor, gate: torch.Tensor) -> Any:
+        if isinstance(output, torch.Tensor):
+            add = delta_summary.to(output.device, output.dtype)
+            gate_t = gate.to(output.device, output.dtype)
+            if output.ndim == 2:
+                add_vec = add[0] if add.ndim == 2 else add
+                return output + gate_t * add_vec.unsqueeze(0)
+            if output.ndim >= 3:
+                if add.shape[0] == 1 and output.shape[0] != 1:
+                    add = add.expand(output.shape[0], -1)
+                return output + gate_t * add.view(add.shape[0], *([1] * (output.ndim - 2)), add.shape[-1])
+            return output
+        if isinstance(output, tuple):
+            return tuple(self._add_delta(item, delta_summary, gate) for item in output)
+        if isinstance(output, list):
+            return [self._add_delta(item, delta_summary, gate) for item in output]
+        return output
+
     def attach(self, model: Any) -> None:
         target = getattr(model, "model", model)
         if not hasattr(target, "get_image_features"):
@@ -49,13 +76,9 @@ class QwenFrameOpsConnectorAdapter(nn.Module):
 
         def wrapped_get_image_features(this, *args, **kwargs):
             output = original(*args, **kwargs)
-            if adapter._evidence is None:
+            delta_summary = adapter._project_delta()
+            if delta_summary is None:
                 return output
-            ev = adapter._evidence.to(next(adapter.parameters()).device)
-            delta = adapter.project(ev)
-            if delta.ndim == 2:
-                delta = delta[:, None, :]
-            delta_summary = delta.mean(dim=1)
             gate = torch.sigmoid(adapter.gate)
 
             if hasattr(output, "pooler_output"):
@@ -66,16 +89,11 @@ class QwenFrameOpsConnectorAdapter(nn.Module):
                 output.pooler_output = pooled + gate.to(pooled.device, pooled.dtype) * add[:, None, :]
                 if getattr(output, "deepstack_features", None) is not None:
                     output.deepstack_features = [
-                        feat + gate.to(feat.device, feat.dtype) * add.to(feat.device, feat.dtype)[:, None, :]
+                        adapter._add_delta(feat, delta_summary, gate)
                         for feat in output.deepstack_features
                     ]
                 return output
-            if isinstance(output, torch.Tensor):
-                add = delta_summary.to(output.device, output.dtype)
-                if add.shape[0] == 1 and output.shape[0] != 1:
-                    add = add.expand(output.shape[0], -1)
-                return output + gate.to(output.device, output.dtype) * add[:, None, :]
-            return output
+            return adapter._add_delta(output, delta_summary, gate)
 
         target.get_image_features = MethodType(wrapped_get_image_features, target)
         self._state = AdapterState(target=target, original_get_image_features=original)
