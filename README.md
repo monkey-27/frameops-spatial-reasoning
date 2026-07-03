@@ -83,8 +83,8 @@ baseline eval. Smoke and synthetic controller training do not require the token.
 ```bash
 python3 -m modal run modal/modal_app.py::smoke
 python3 -m modal run modal/modal_app.py::generate_synthetic --config configs/modal_smoke.yaml
-python3 -m modal run modal/modal_train.py::train --config configs/synthetic_oracle.yaml
-python3 -m modal run modal/modal_eval.py::eval --checkpoint /vol/checkpoints/modal_smoke/frameops_controller.pt
+python3 -m modal run modal/modal_train.py::train --config configs/modal_synthetic_oracle.yaml
+python3 -m modal run modal/modal_eval.py::eval --config configs/modal_synthetic_oracle.yaml --checkpoint /vol/checkpoints/synthetic_oracle/frameops_controller.pt
 python3 -m modal run modal/modal_app.py::eval_baselines --data-config configs/modal_smoke.yaml --limit 8
 ```
 
