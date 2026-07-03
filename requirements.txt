@@ -1,0 +1,12 @@
+torch>=2.2
+numpy>=1.24
+pillow>=10.0
+matplotlib>=3.8
+pyyaml>=6.0
+tqdm>=4.66
+pytest>=8.0
+transformers>=4.53
+accelerate>=0.33
+peft>=0.11
+datasets>=2.20
+modal>=0.64

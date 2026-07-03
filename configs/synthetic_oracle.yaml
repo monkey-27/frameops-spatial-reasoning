@@ -1,0 +1,20 @@
+seed: 7
+output_dir: data/synthetic/oracle_v0
+synthetic:
+  image_size: 256
+  train_scenes: 240
+  val_scenes: 60
+  test_scenes: 80
+  min_objects: 3
+  max_objects: 7
+  heldout_test_hard: true
+training:
+  batch_size: 32
+  epochs: 8
+  lr: 0.001
+  hidden_dim: 128
+  checkpoint_dir: checkpoints/synthetic_oracle
+  freeze_qwen: true
+  wandb: false
+eval:
+  noise_levels: [0.0, 0.05, 0.1, 0.2]

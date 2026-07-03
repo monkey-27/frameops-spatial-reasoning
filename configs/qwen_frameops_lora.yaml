@@ -1,0 +1,21 @@
+seed: 17
+model:
+  name: Qwen/Qwen3-VL-8B-Instruct
+  dtype: bfloat16
+  device_map: auto
+  deterministic: true
+  max_new_tokens: 16
+frameops:
+  hidden_evidence: true
+  text_evidence_fallback: true
+  evidence_tokens: 8
+  hidden_dim: 256
+training:
+  freeze_qwen: true
+  train_controller: true
+  train_evidence_projection: true
+  lora:
+    enabled: false
+    r: 8
+    alpha: 16
+    dropout: 0.05

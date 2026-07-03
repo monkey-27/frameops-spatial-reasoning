@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fake-nurps-frameops"
+version = "0.1.0"
+description = "FrameOps falsifiable pilot for executable spatial operators versus geometry-as-text in VLM spatial reasoning."
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+  "torch>=2.2",
+  "numpy>=1.24",
+  "pillow>=10.0",
+  "matplotlib>=3.8",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "transformers>=4.53",
+  "accelerate>=0.33",
+  "peft>=0.11",
+  "datasets>=2.20",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+modal = [
+  "modal>=0.64",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["frameops*", "vlm*", "datasets*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
