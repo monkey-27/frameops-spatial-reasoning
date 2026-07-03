@@ -118,7 +118,6 @@ def run_hidden_generation(status: dict[str, Any], *, out_dir: Path, config: str,
     adapter = QwenFrameOpsConnectorAdapter(evidence_dim=16, hidden_size=int(hidden_size))
     adapter.to(bundle.model.device)
     adapter.attach(bundle.model)
-    status["tested_in_forward_pass"] = True
     predictions = []
     try:
         for sample in subset:
@@ -155,6 +154,7 @@ def run_hidden_generation(status: dict[str, Any], *, out_dir: Path, config: str,
                 }
             )
         status["tested_in_generation"] = True
+        status["tested_in_forward_pass"] = True
         status["minimal_hidden_evidence_run_completed"] = bool(predictions)
         hidden_rows = [row for row in predictions if row["mode"] == "hidden_connector_oracle_frameops"]
         json_rows = [row for row in predictions if row["mode"] == "geometry_json"]
@@ -180,7 +180,9 @@ def run(config: str, out_dir: str | Path, n: int) -> Path:
             status = run_hidden_generation(status, out_dir=out, config=config, n=n)
         except Exception as exc:
             status["blockers"].append(f"hidden_generation_failed: {exc}")
-            status["blocker_traceback"] = traceback.format_exc(limit=8)
+            status["blocker_traceback"] = traceback.format_exc()
+            status["tested_in_forward_pass"] = False
+            status["tested_in_generation"] = False
             status["minimal_hidden_evidence_run_completed"] = False
     if status["minimal_hidden_evidence_run_completed"] and status["hidden_subset_n"] < 120:
         status["blockers"].append("hidden_generation_only_tiny_subset_not_method_evidence")
