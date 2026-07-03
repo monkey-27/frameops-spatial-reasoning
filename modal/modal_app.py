@@ -105,8 +105,3 @@ def eval_baselines(
     volume.commit()
     hf_cache.commit()
     return {"status": "ok", "output": output}
-
-
-@app.local_entrypoint()
-def main() -> None:
-    print(json.dumps(smoke.remote(), indent=2, sort_keys=True))
