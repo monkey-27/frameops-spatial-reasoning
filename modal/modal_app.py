@@ -30,6 +30,7 @@ image = (
     )
     .uv_pip_install(
         "torch>=2.2",
+        "torchvision>=0.17",
         "numpy>=1.24",
         "pillow>=10.0",
         "matplotlib>=3.8",
