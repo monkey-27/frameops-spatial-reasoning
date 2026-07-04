@@ -55,6 +55,18 @@ def run(out_dir: str | Path) -> Path:
     img_learned = _acc(baselines, "image_plus_learned_frameops_text")
     text_json = _acc(baselines, "text_only_geometry_json")
     text_oracle = _acc(baselines, "text_only_oracle_frameops_text")
+    image_outputs_changed = bool(
+        sensitivity
+        and sensitivity.get("prediction_agreement_correct_vs_blank", 1.0) < 0.85
+        and sensitivity.get("prediction_agreement_correct_vs_wrong", 1.0) < 0.85
+    )
+    image_accuracy_clean = bool(
+        correct is not None
+        and blank is not None
+        and wrong is not None
+        and correct > blank + 0.05
+        and correct > wrong + 0.05
+    )
 
     if not identity_pass:
         decision = "STOP: the exact Qwen3-VL identity/image-input check failed."
@@ -62,13 +74,19 @@ def run(out_dir: str | Path) -> Path:
     elif not trace_pass:
         decision = "STOP: generation traces did not prove image tensors reached Qwen3-VL."
         previous_validity = "Contaminated or unproven for VLM claims."
-    elif correct is not None and blank is not None and wrong is not None and (
-        correct <= blank + 0.05 or sensitivity.get("prediction_agreement_correct_vs_blank", 1.0) > 0.85
-    ):
-        decision = "PIVOT: real Qwen3-VL path, but image sensitivity is low or text/geometry leakage dominates."
-        previous_validity = "Model path is VLM, but the task/prompt may not test vision strongly enough."
+    elif correct is not None and blank is not None and wrong is not None and not image_accuracy_clean:
+        if image_outputs_changed:
+            decision = (
+                "PIVOT: real Qwen3-VL path and outputs change under image replacement, but correct images "
+                "do not cleanly outperform blank/wrong images. The diagnostic is image-active, not image-reliable."
+            )
+        else:
+            decision = "PIVOT: real Qwen3-VL path, but image sensitivity is low or text/geometry leakage dominates."
+        previous_validity = (
+            "The previous run was not text-only, but VLM claims need a stronger image-dependence diagnostic."
+        )
     elif img_oracle is not None and img_json is not None and img_oracle <= img_json + 0.02:
-        decision = "KILL TEXT-INTERFACE FRAMEOPS: real image path, image-sensitive setup, but oracle FrameOps text does not beat geometry JSON."
+        decision = "KILL TEXT-INTERFACE FRAMEOPS: real image path and image-sensitive setup, but oracle FrameOps text does not beat geometry JSON."
         previous_validity = "Valid as a text-interface negative result if identity and trace passed."
     elif img_oracle is not None and img_json is not None and img_oracle > img_json + 0.05:
         decision = "CONTINUE: image+oracle FrameOps text appears to beat image+geometry JSON; rerun with replication."
