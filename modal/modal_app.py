@@ -71,11 +71,18 @@ def _try_run(args: list[str], failure_path: str, label: str) -> bool:
         return True
     except Exception as exc:
         Path(failure_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(failure_path).write_text(
+        path = Path(failure_path)
+        if path.exists():
+            path = path.with_suffix(path.suffix + ".failure.json")
+        path.write_text(
             json.dumps({"status": "failed", "step": label, "error": str(exc)}, indent=2, sort_keys=True),
             encoding="utf-8",
         )
         return False
+
+
+def _vlm_out_dir(out_dir: str | None) -> str:
+    return out_dir or str(VOL / "results" / f"vlm_pipeline_check_{_timestamp()}")
 
 
 def _best_controller_checkpoint(out: str, fallback: str) -> str:
@@ -281,3 +288,214 @@ def diagnostic_all(
     volume.commit()
     hf_cache.commit()
     return {"status": "ok", "out_dir": out, "qwen_n": str(qwen_n), "hidden_n": str(hidden_n)}
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=4 * 60 * 60,
+    volumes={str(VOL): volume, str(CACHE): hf_cache},
+    secrets=[hf_secret],
+)
+def check_qwen_vl_identity(
+    model: str = "Qwen/Qwen3-VL-8B-Instruct",
+    out_dir: str | None = None,
+) -> dict[str, str]:
+    out = _vlm_out_dir(out_dir)
+    _run(["scripts/check_qwen_vl_identity.py", "--model", model, "--out-dir", out])
+    volume.commit()
+    hf_cache.commit()
+    return {"status": "ok", "out_dir": out, "artifact": str(Path(out) / "model_identity.json")}
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=4 * 60 * 60,
+    volumes={str(VOL): volume, str(CACHE): hf_cache},
+    secrets=[hf_secret],
+)
+def diagnostic_vlm_input_trace(
+    config: str = "configs/synthetic_oracle.yaml",
+    model: str = "Qwen/Qwen3-VL-8B-Instruct",
+    out_dir: str | None = None,
+    n: int = 12,
+) -> dict[str, str]:
+    out = _vlm_out_dir(out_dir)
+    _run(["scripts/trace_qwen_vl_inputs.py", "--config", config, "--model", model, "--out-dir", out, "--n", str(n)])
+    volume.commit()
+    hf_cache.commit()
+    return {"status": "ok", "out_dir": out, "artifact": str(Path(out) / "vlm_input_trace.json")}
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=6 * 60 * 60,
+    volumes={str(VOL): volume, str(CACHE): hf_cache},
+    secrets=[hf_secret],
+)
+def diagnostic_qwen_vl_image_sensitivity(
+    config: str = "configs/synthetic_oracle.yaml",
+    model: str = "Qwen/Qwen3-VL-8B-Instruct",
+    out_dir: str | None = None,
+    n: int = 60,
+) -> dict[str, str]:
+    out = _vlm_out_dir(out_dir)
+    _run(
+        [
+            "scripts/eval_qwen_vl_image_sensitivity.py",
+            "--config",
+            config,
+            "--model",
+            model,
+            "--out-dir",
+            out,
+            "--n",
+            str(n),
+        ]
+    )
+    volume.commit()
+    hf_cache.commit()
+    return {"status": "ok", "out_dir": out, "artifact": str(Path(out) / "image_sensitivity.json")}
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=16 * 60 * 60,
+    volumes={str(VOL): volume, str(CACHE): hf_cache},
+    secrets=[hf_secret],
+)
+def diagnostic_qwen_vl_baselines(
+    config: str = "configs/synthetic_oracle.yaml",
+    model: str = "Qwen/Qwen3-VL-8B-Instruct",
+    out_dir: str | None = None,
+    n: int = 360,
+    checkpoint: str = "/vol/checkpoints/synthetic_oracle/frameops_controller.pt",
+    require_image_input: bool = True,
+) -> dict[str, str]:
+    out = _vlm_out_dir(out_dir)
+    _run(
+        [
+            "scripts/eval_qwen_vl_diagnostic.py",
+            "--config",
+            config,
+            "--model",
+            model,
+            "--out-dir",
+            out,
+            "--n",
+            str(n),
+            "--checkpoint",
+            checkpoint,
+            "--require-image-input",
+            str(require_image_input).lower(),
+        ]
+    )
+    volume.commit()
+    hf_cache.commit()
+    return {"status": "ok", "out_dir": out, "artifact": str(Path(out) / "qwen_vl_baselines.json")}
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=4 * 60 * 60,
+    volumes={str(VOL): volume, str(CACHE): hf_cache},
+    secrets=[hf_secret],
+)
+def diagnostic_qwen_vl_hidden_debug(
+    config: str = "configs/synthetic_oracle.yaml",
+    model: str = "Qwen/Qwen3-VL-8B-Instruct",
+    out_dir: str | None = None,
+) -> dict[str, str]:
+    out = _vlm_out_dir(out_dir)
+    _run(["scripts/debug_hidden_connector_qwen_vl.py", "--config", config, "--model", model, "--out-dir", out])
+    volume.commit()
+    hf_cache.commit()
+    return {"status": "ok", "out_dir": out, "artifact": str(Path(out) / "hidden_connector_debug.json")}
+
+
+@app.function(image=image, timeout=30 * 60, volumes={str(VOL): volume, str(CACHE): hf_cache})
+def diagnostic_qwen_vl_pipeline_report(out_dir: str) -> dict[str, str]:
+    _run(["scripts/write_vlm_pipeline_report.py", "--out-dir", out_dir])
+    volume.commit()
+    return {"status": "ok", "out_dir": out_dir, "artifact": str(Path(out_dir) / "vlm_pipeline_report.md")}
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=24 * 60 * 60,
+    volumes={str(VOL): volume, str(CACHE): hf_cache},
+    secrets=[hf_secret],
+)
+def diagnostic_qwen_vl_pipeline_all(
+    config: str = "configs/synthetic_oracle.yaml",
+    model: str = "Qwen/Qwen3-VL-8B-Instruct",
+    out_dir: str | None = None,
+    n_baselines: int = 360,
+    n_sensitivity: int = 60,
+    n_trace: int = 12,
+    checkpoint: str = "/vol/checkpoints/synthetic_oracle/frameops_controller.pt",
+) -> dict[str, str]:
+    out = _vlm_out_dir(out_dir)
+    identity_ok = _try_run(
+        ["scripts/check_qwen_vl_identity.py", "--model", model, "--out-dir", out],
+        str(Path(out) / "model_identity.json"),
+        "check_qwen_vl_identity",
+    )
+    if identity_ok:
+        _try_run(
+            ["scripts/trace_qwen_vl_inputs.py", "--config", config, "--model", model, "--out-dir", out, "--n", str(n_trace)],
+            str(Path(out) / "vlm_input_trace.json"),
+            "vlm_input_trace",
+        )
+        _try_run(
+            [
+                "scripts/eval_qwen_vl_image_sensitivity.py",
+                "--config",
+                config,
+                "--model",
+                model,
+                "--out-dir",
+                out,
+                "--n",
+                str(n_sensitivity),
+            ],
+            str(Path(out) / "image_sensitivity.json"),
+            "qwen_vl_image_sensitivity",
+        )
+        _try_run(
+            [
+                "scripts/eval_qwen_vl_diagnostic.py",
+                "--config",
+                config,
+                "--model",
+                model,
+                "--out-dir",
+                out,
+                "--n",
+                str(n_baselines),
+                "--checkpoint",
+                checkpoint,
+                "--require-image-input",
+                "true",
+            ],
+            str(Path(out) / "qwen_vl_baselines.json"),
+            "qwen_vl_baselines",
+        )
+        _try_run(
+            ["scripts/debug_hidden_connector_qwen_vl.py", "--config", config, "--model", model, "--out-dir", out],
+            str(Path(out) / "hidden_connector_debug.json"),
+            "qwen_vl_hidden_debug",
+        )
+    _try_run(
+        ["scripts/write_vlm_pipeline_report.py", "--out-dir", out],
+        str(Path(out) / "vlm_pipeline_report.md"),
+        "vlm_pipeline_report",
+    )
+    volume.commit()
+    hf_cache.commit()
+    return {"status": "ok" if identity_ok else "identity_failed", "out_dir": out}
